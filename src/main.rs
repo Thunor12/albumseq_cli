@@ -74,6 +74,7 @@ impl SerMedium {
         AlbumMedium {
             sides: self.sides,
             max_duration_per_side: self.max_duration_per_side,
+            name: self.name.clone(),
         }
     }
 }
@@ -224,6 +225,37 @@ fn format_duration(duration: Duration) -> String {
     let minutes = total_seconds / 60;
     let seconds = total_seconds % 60;
     format!("{:02}:{:02}", minutes, seconds)
+}
+
+/// Helper: Split a tracklist into sides based on medium max duration per side
+fn split_tracklist_by_side<'a>(
+    tracklist: &'a Tracklist,
+    medium: &'a AlbumMedium,
+) -> Vec<Vec<&'a Track>> {
+    let mut sides = Vec::new();
+    let mut current_side = Vec::new();
+    let mut current_duration = 0.0;
+
+    for track in &tracklist.0 {
+        if current_duration + track.duration <= medium.max_duration_per_side {
+            current_side.push(track);
+            current_duration += track.duration;
+        } else {
+            sides.push(current_side);
+            current_side = vec![track];
+            current_duration = track.duration;
+        }
+
+        if sides.len() == medium.sides {
+            break;
+        }
+    }
+
+    if !current_side.is_empty() {
+        sides.push(current_side);
+    }
+
+    sides
 }
 
 #[derive(Parser)]
@@ -535,6 +567,7 @@ fn main() {
                     let score = score_tracklist(&tl, &constraints, &medium);
                     (score, tl)
                 })
+                .filter(|(_, tl)| medium.fits(tl))
                 .collect();
 
             scored_perms.sort_by(|a, b| b.0.cmp(&a.0)); // descending by score
@@ -562,17 +595,21 @@ fn main() {
                 );
                 println!("{} {}", "-".repeat(max_title_len), "-".repeat(8));
 
-                let mut total_duration = 0.0;
+                let sides = split_tracklist_by_side(&tl, &medium);
 
-                for t in &tl.0 {
-                    println!(
-                        "{:<width$} {:>8}",
-                        t.title,
-                        format_duration(t.duration),
-                        width = max_title_len
-                    );
-                    total_duration += t.duration;
+                for (side_idx, side_tracks) in sides.iter().enumerate() {
+                    println!("----- side {} --------", side_idx);
+                    for t in side_tracks {
+                        println!(
+                            "{:<width$} {:>8}",
+                            t.title,
+                            format_duration(t.duration),
+                            width = max_title_len
+                        );
+                    }
                 }
+
+                let total_duration: Duration = tl.0.iter().map(|t| t.duration).sum();
 
                 println!(
                     "{:<width$} {:>8}",
