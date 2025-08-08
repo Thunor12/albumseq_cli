@@ -117,6 +117,17 @@ enum Commands {
     Show,
 }
 
+fn parse_duration(s: &str) -> Option<f64> {
+    if let Some((min_str, sec_str)) = s.split_once(':') {
+        // MM:SS format
+        if let (Ok(min), Ok(sec)) = (min_str.parse::<u32>(), sec_str.parse::<u32>()) {
+            return Some(min as f64 + sec as f64 / 60.0);
+        }
+    }
+    // fallback: decimal minutes
+    s.parse::<f64>().ok()
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -138,10 +149,10 @@ fn main() {
                 .filter_map(|s| {
                     let parts: Vec<_> = s.splitn(2, ':').collect();
                     if parts.len() == 2 {
-                        parts[1].parse::<f64>().ok().map(|duration| Track {
-                            title: parts[0].to_string(),
-                            duration,
-                        })
+                        // Careful: first `:` split is between title and duration, so we rejoin after
+                        let title = parts[0].to_string();
+                        let duration_str = parts[1];
+                        parse_duration(duration_str).map(|duration| Track { title, duration })
                     } else {
                         None
                     }
