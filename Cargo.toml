@@ -1,0 +1,7 @@
+[package]
+name = "albumseq_cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+albumseq = { git = "https://github.com/Thunor12/albumseq.git", branch = "main" }
