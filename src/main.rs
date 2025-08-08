@@ -1,5 +1,9 @@
-use albumseq::{Duration, Medium, Track, Tracklist};
+use albumseq::{
+    Constraint as AlbumConstraint, ConstraintKind as AlbumConstraintKind, Duration,
+    Medium as AlbumMedium, Track, Tracklist, TracklistPermutations, score_tracklist,
+};
 use clap::{Parser, Subcommand};
+
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -8,7 +12,8 @@ use std::{
 
 const DEFAULT_CONTEXT_PATH: &str = "context.json";
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+/// Serializable Track for saving/loading
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct SerTrack {
     pub title: String,
     pub duration: Duration,
@@ -23,32 +28,116 @@ impl From<&Track> for SerTrack {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+impl From<&SerTrack> for Track {
+    fn from(st: &SerTrack) -> Self {
+        Track {
+            title: st.title.clone(),
+            duration: st.duration,
+        }
+    }
+}
+
+/// Serializable Tracklist wrapper
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct SerTracklist(pub Vec<SerTrack>);
 
-impl From<Tracklist> for SerTracklist {
-    fn from(tl: Tracklist) -> Self {
+impl From<&Tracklist> for SerTracklist {
+    fn from(tl: &Tracklist) -> Self {
         SerTracklist(tl.0.iter().map(|t| t.into()).collect())
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+impl From<&SerTracklist> for Tracklist {
+    fn from(stl: &SerTracklist) -> Self {
+        Tracklist(stl.0.iter().map(|st| st.into()).collect())
+    }
+}
+
+/// Named Tracklist with a name key
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct NamedSerTracklist {
     pub name: String,
     pub tracks: SerTracklist,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct NamedSerMedium {
+/// Serializable Medium with name for identification
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct SerMedium {
     pub name: String,
     pub sides: usize,
     pub max_duration_per_side: Duration,
 }
 
+impl SerMedium {
+    /// Convert to library Medium (without name)
+    pub fn to_album_medium(&self) -> AlbumMedium {
+        AlbumMedium {
+            sides: self.sides,
+            max_duration_per_side: self.max_duration_per_side,
+        }
+    }
+}
+
+/// Serializable constraint kinds for saving/loading
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "kind", content = "data")]
+pub enum SerConstraintKind {
+    AtPosition(String, usize),
+    Adjacent(String, String),
+    OnSameSide(String, String),
+}
+
+/// Serializable constraint with kind and weight
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SerConstraint {
+    pub kind: SerConstraintKind,
+    pub weight: usize,
+}
+
+/// Convert from SerConstraint to albumseq Constraint
+impl From<SerConstraint> for AlbumConstraint {
+    fn from(c: SerConstraint) -> Self {
+        let kind = match c.kind {
+            SerConstraintKind::AtPosition(title, pos) => {
+                AlbumConstraintKind::AtPosition(title, pos)
+            }
+            SerConstraintKind::Adjacent(t1, t2) => AlbumConstraintKind::Adjacent(t1, t2),
+            SerConstraintKind::OnSameSide(t1, t2) => AlbumConstraintKind::OnSameSide(t1, t2),
+        };
+        AlbumConstraint {
+            kind,
+            weight: c.weight,
+        }
+    }
+}
+
+/// Convert from albumseq Constraint to SerConstraint
+impl From<&AlbumConstraint> for SerConstraint {
+    fn from(c: &AlbumConstraint) -> Self {
+        let kind = match &c.kind {
+            AlbumConstraintKind::AtPosition(title, pos) => {
+                SerConstraintKind::AtPosition(title.clone(), *pos)
+            }
+            AlbumConstraintKind::Adjacent(t1, t2) => {
+                SerConstraintKind::Adjacent(t1.clone(), t2.clone())
+            }
+            AlbumConstraintKind::OnSameSide(t1, t2) => {
+                SerConstraintKind::OnSameSide(t1.clone(), t2.clone())
+            }
+        };
+        SerConstraint {
+            kind,
+            weight: c.weight,
+        }
+    }
+}
+
+/// The main program context holding tracklists, mediums, and constraints
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct ProgramContext {
     pub tracklists: Vec<NamedSerTracklist>,
-    pub mediums: Vec<NamedSerMedium>,
+    pub mediums: Vec<SerMedium>,
+    pub constraints: Vec<SerConstraint>,
 }
 
 impl ProgramContext {
@@ -89,11 +178,16 @@ impl ProgramContext {
     }
 
     /// Add or replace a medium by name
-    fn add_or_replace_medium(&mut self, name: String, medium: Medium) {
-        let new_med = NamedSerMedium {
+    fn add_or_replace_medium(
+        &mut self,
+        name: String,
+        sides: usize,
+        max_duration_per_side: Duration,
+    ) {
+        let new_medium = SerMedium {
             name: name.clone(),
-            sides: medium.sides,
-            max_duration_per_side: medium.max_duration_per_side,
+            sides,
+            max_duration_per_side,
         };
 
         if let Some(existing) = self
@@ -101,11 +195,25 @@ impl ProgramContext {
             .iter_mut()
             .find(|m| m.name.eq_ignore_ascii_case(&name))
         {
-            *existing = new_med;
+            *existing = new_medium;
             println!("Replaced medium '{}'", name);
         } else {
-            self.mediums.push(new_med);
+            self.mediums.push(new_medium);
             println!("Added medium '{}'", name);
+        }
+    }
+
+    /// Add or replace a constraint
+    fn add_or_replace_constraint(&mut self, constraint: AlbumConstraint) {
+        let ser_constraint = SerConstraint::from(&constraint);
+        let kind = ser_constraint.kind;
+
+        if let Some(existing) = self.constraints.iter_mut().find(|c| c.kind == kind) {
+            *existing = SerConstraint::from(&constraint);
+            println!("Replaced constraint {:?}", kind);
+        } else {
+            self.constraints.push(SerConstraint::from(&constraint));
+            println!("Added constraint {:?}", kind);
         }
     }
 }
@@ -132,40 +240,70 @@ struct Cli {
 enum Commands {
     /// Initialize a new context file
     Init,
-    /// Add a new named tracklist to the context (replaces if same name exists)
+    /// Add or replace a named tracklist
     AddTracklist {
         /// Name of the tracklist
         #[arg(short, long)]
         name: String,
 
-        /// Tracks in the format "Title:Duration"
+        /// Tracks in format "Title:Duration" (duration supports MM:SS or decimal minutes)
         #[arg(short, long)]
         tracks: Vec<String>,
     },
-    /// Add a new named medium to the context (replaces if same name exists)
+    /// Add or replace a named medium
     AddMedium {
         /// Name of the medium
         #[arg(short, long)]
         name: String,
 
-        /// Number of sides
-        #[arg(short, long)]
+        /// Number of sides (integer)
+        #[arg(short = 's', long)]
         sides: usize,
 
-        /// Max duration per side, format MM:SS or decimal minutes
-        #[arg(short, long)]
+        /// Max duration per side (MM:SS or decimal minutes)
+        #[arg(short = 'd', long)]
         max_duration: String,
     },
-    /// Show the context (tracklists and mediums)
+    /// Add or replace a constraint
+    AddConstraint {
+        /// Constraint kind: "atpos", "adjacent", or "onsameside"
+        #[arg(short, long)]
+        kind: String,
+
+        /// Arguments depending on kind
+        #[arg(short = 'a', long)]
+        args: Vec<String>,
+
+        /// Weight of the constraint
+        #[arg(short, long, default_value = "1")]
+        weight: usize,
+    },
+    /// Show the entire context
     Show,
+    /// Propose top scoring tracklist permutations for a tracklist & medium
+    Propose {
+        /// Tracklist name to use
+        #[arg(short, long)]
+        tracklist: String,
+
+        /// Medium name to use
+        #[arg(short, long)]
+        medium: String,
+
+        /// Number of propositions to show
+        #[arg(short, long, default_value = "5")]
+        count: usize,
+    },
 }
 
 fn parse_duration(s: &str) -> Option<f64> {
     if let Some((min_str, sec_str)) = s.split_once(':') {
+        // MM:SS format
         if let (Ok(min), Ok(sec)) = (min_str.parse::<u32>(), sec_str.parse::<u32>()) {
             return Some(min as f64 + sec as f64 / 60.0);
         }
     }
+    // fallback: decimal minutes
     s.parse::<f64>().ok()
 }
 
@@ -182,6 +320,7 @@ fn main() {
                 println!("Created new context at {:?}", cli.context);
             }
         }
+
         Commands::AddTracklist { name, tracks } => {
             let mut ctx = ProgramContext::load_or_create(&cli.context);
 
@@ -202,28 +341,85 @@ fn main() {
             ctx.add_or_replace_tracklist(name.clone(), parsed_tracks);
             ctx.save(&cli.context);
         }
+
         Commands::AddMedium {
             name,
             sides,
             max_duration,
         } => {
             let mut ctx = ProgramContext::load_or_create(&cli.context);
+            if let Some(duration) = parse_duration(max_duration) {
+                ctx.add_or_replace_medium(name.clone(), *sides, duration);
+                ctx.save(&cli.context);
+            } else {
+                eprintln!("Invalid duration format: {}", max_duration);
+            }
+        }
 
-            let max_dur = parse_duration(max_duration)
-                .unwrap_or_else(|| panic!("Invalid duration format for max_duration"));
+        Commands::AddConstraint { kind, args, weight } => {
+            let mut ctx = ProgramContext::load_or_create(&cli.context);
 
-            let medium = Medium {
-                sides: *sides,
-                max_duration_per_side: max_dur,
+            let constraint_kind_opt = match kind.to_lowercase().as_str() {
+                "atpos" => {
+                    if args.len() == 2 {
+                        let pos = args[1].parse::<usize>();
+                        if let Ok(pos) = pos {
+                            Some(AlbumConstraintKind::AtPosition(args[0].clone(), pos))
+                        } else {
+                            eprintln!("Invalid position number: {}", args[1]);
+                            None
+                        }
+                    } else {
+                        eprintln!("AtPosition constraint requires exactly 2 arguments: title pos");
+                        None
+                    }
+                }
+                "adjacent" => {
+                    if args.len() == 2 {
+                        Some(AlbumConstraintKind::Adjacent(
+                            args[0].clone(),
+                            args[1].clone(),
+                        ))
+                    } else {
+                        eprintln!(
+                            "Adjacent constraint requires exactly 2 arguments: title1 title2"
+                        );
+                        None
+                    }
+                }
+                "onsameside" => {
+                    if args.len() == 2 {
+                        Some(AlbumConstraintKind::OnSameSide(
+                            args[0].clone(),
+                            args[1].clone(),
+                        ))
+                    } else {
+                        eprintln!(
+                            "OnSameSide constraint requires exactly 2 arguments: title1 title2"
+                        );
+                        None
+                    }
+                }
+                _ => {
+                    eprintln!("Unknown constraint kind: {}", kind);
+                    None
+                }
             };
 
-            ctx.add_or_replace_medium(name.clone(), medium);
-            ctx.save(&cli.context);
+            if let Some(kind) = constraint_kind_opt {
+                let constraint = AlbumConstraint {
+                    kind,
+                    weight: *weight,
+                };
+                ctx.add_or_replace_constraint(constraint);
+                ctx.save(&cli.context);
+            }
         }
+
         Commands::Show => {
             let ctx = ProgramContext::load_or_create(&cli.context);
 
-            if ctx.tracklists.is_empty() && ctx.mediums.is_empty() {
+            if ctx.tracklists.is_empty() && ctx.mediums.is_empty() && ctx.constraints.is_empty() {
                 println!("Context is empty.");
                 return;
             }
@@ -231,8 +427,7 @@ fn main() {
             if !ctx.tracklists.is_empty() {
                 println!("=== Tracklists ===");
                 for tl in &ctx.tracklists {
-                    println!("--- {} ---", tl.name);
-
+                    println!("-- {} --", tl.name);
                     let max_title_len = tl
                         .tracks
                         .0
@@ -282,6 +477,109 @@ fn main() {
                         format_duration(m.max_duration_per_side)
                     );
                 }
+                println!();
+            }
+
+            if !ctx.constraints.is_empty() {
+                println!("=== Constraints ===");
+                for c in &ctx.constraints {
+                    println!("{:?} (weight {})", c.kind, c.weight);
+                }
+                println!();
+            }
+        }
+
+        Commands::Propose {
+            tracklist: tracklist_name,
+            medium: medium_name,
+            count,
+        } => {
+            let ctx = ProgramContext::load_or_create(&cli.context);
+
+            // Find the tracklist by name
+            let ser_tl = ctx
+                .tracklists
+                .iter()
+                .find(|tl| tl.name.eq_ignore_ascii_case(tracklist_name));
+
+            if ser_tl.is_none() {
+                eprintln!("Tracklist '{}' not found", tracklist_name);
+                return;
+            }
+            let ser_tl = ser_tl.unwrap();
+            let tracklist = Tracklist::from(&ser_tl.tracks);
+
+            // Find the medium by name
+            let ser_medium = ctx
+                .mediums
+                .iter()
+                .find(|m| m.name.eq_ignore_ascii_case(medium_name));
+            if ser_medium.is_none() {
+                eprintln!("Medium '{}' not found", medium_name);
+                return;
+            }
+            let ser_medium = ser_medium.unwrap();
+            let medium = ser_medium.to_album_medium();
+
+            // Convert constraints to albumseq constraints
+            let constraints: Vec<AlbumConstraint> =
+                ctx.constraints.iter().cloned().map(|c| c.into()).collect();
+
+            // Create permutations iterator
+            let perms = TracklistPermutations::new(&tracklist.0);
+
+            // Score permutations and keep top `count` by descending score
+            let mut scored_perms: Vec<(usize, Tracklist)> = perms
+                .map(|perm| {
+                    let tl = Tracklist(perm.into_iter().cloned().collect());
+                    let score = score_tracklist(&tl, &constraints, &medium);
+                    (score, tl)
+                })
+                .collect();
+
+            scored_perms.sort_by(|a, b| b.0.cmp(&a.0)); // descending by score
+
+            println!(
+                "Top {} permutations for tracklist '{}' on medium '{}':",
+                count, tracklist_name, medium_name
+            );
+
+            for (score, tl) in scored_perms.into_iter().take(*count) {
+                println!("Score: {}", score);
+
+                let max_title_len =
+                    tl.0.iter()
+                        .map(|t| t.title.len())
+                        .max()
+                        .unwrap_or(5)
+                        .max("Title".len());
+
+                println!(
+                    "{:<width$} {:>8}",
+                    "Title",
+                    "Duration",
+                    width = max_title_len
+                );
+                println!("{} {}", "-".repeat(max_title_len), "-".repeat(8));
+
+                let mut total_duration = 0.0;
+
+                for t in &tl.0 {
+                    println!(
+                        "{:<width$} {:>8}",
+                        t.title,
+                        format_duration(t.duration),
+                        width = max_title_len
+                    );
+                    total_duration += t.duration;
+                }
+
+                println!(
+                    "{:<width$} {:>8}",
+                    "TOTAL",
+                    format_duration(total_duration),
+                    width = max_title_len
+                );
                 println!();
             }
         }
