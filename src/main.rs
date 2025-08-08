@@ -81,6 +81,14 @@ impl ProgramContext {
     }
 }
 
+/// Format a duration in minutes (f64) as "MM:SS"
+fn format_duration(duration: Duration) -> String {
+    let total_seconds = (duration * 60.0).round() as u64;
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    format!("{:02}:{:02}", minutes, seconds)
+}
+
 #[derive(Parser)]
 #[command(author, version, about)]
 struct Cli {
@@ -153,11 +161,42 @@ fn main() {
 
             for tl in &ctx.tracklists {
                 println!("=== {} ===", tl.name);
-                println!("{:<30} {:>8}", "Title", "Duration");
-                println!("{}", "-".repeat(40));
+
+                let max_title_len = tl
+                    .tracks
+                    .0
+                    .iter()
+                    .map(|t| t.title.len())
+                    .max()
+                    .unwrap_or(5)
+                    .max("Title".len());
+
+                let mut total_duration: Duration = 0.0;
+
+                println!(
+                    "{:<width$} {:>8}",
+                    "Title",
+                    "Duration",
+                    width = max_title_len
+                );
+                println!("{} {}", "-".repeat(max_title_len), "-".repeat(8));
+
                 for t in &tl.tracks.0 {
-                    println!("{:<30} {:>8.2}", t.title, t.duration);
+                    println!(
+                        "{:<width$} {:>8}",
+                        t.title,
+                        format_duration(t.duration),
+                        width = max_title_len
+                    );
+                    total_duration += t.duration;
                 }
+
+                println!(
+                    "{:<width$} {:>8}",
+                    "TOTAL",
+                    format_duration(total_duration),
+                    width = max_title_len
+                );
                 println!();
             }
         }
