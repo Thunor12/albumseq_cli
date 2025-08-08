@@ -1,4 +1,4 @@
-use albumseq::{Duration, Track, Tracklist};
+use albumseq::{Duration, Medium, Track, Tracklist};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -39,8 +39,16 @@ pub struct NamedSerTracklist {
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
+pub struct NamedSerMedium {
+    pub name: String,
+    pub sides: usize,
+    pub max_duration_per_side: Duration,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct ProgramContext {
     pub tracklists: Vec<NamedSerTracklist>,
+    pub mediums: Vec<NamedSerMedium>,
 }
 
 impl ProgramContext {
@@ -79,6 +87,27 @@ impl ProgramContext {
             println!("Added tracklist '{}'", name);
         }
     }
+
+    /// Add or replace a medium by name
+    fn add_or_replace_medium(&mut self, name: String, medium: Medium) {
+        let new_med = NamedSerMedium {
+            name: name.clone(),
+            sides: medium.sides,
+            max_duration_per_side: medium.max_duration_per_side,
+        };
+
+        if let Some(existing) = self
+            .mediums
+            .iter_mut()
+            .find(|m| m.name.eq_ignore_ascii_case(&name))
+        {
+            *existing = new_med;
+            println!("Replaced medium '{}'", name);
+        } else {
+            self.mediums.push(new_med);
+            println!("Added medium '{}'", name);
+        }
+    }
 }
 
 /// Format a duration in minutes (f64) as "MM:SS"
@@ -113,18 +142,30 @@ enum Commands {
         #[arg(short, long)]
         tracks: Vec<String>,
     },
-    /// Show the context
+    /// Add a new named medium to the context (replaces if same name exists)
+    AddMedium {
+        /// Name of the medium
+        #[arg(short, long)]
+        name: String,
+
+        /// Number of sides
+        #[arg(short, long)]
+        sides: usize,
+
+        /// Max duration per side, format MM:SS or decimal minutes
+        #[arg(short, long)]
+        max_duration: String,
+    },
+    /// Show the context (tracklists and mediums)
     Show,
 }
 
 fn parse_duration(s: &str) -> Option<f64> {
     if let Some((min_str, sec_str)) = s.split_once(':') {
-        // MM:SS format
         if let (Ok(min), Ok(sec)) = (min_str.parse::<u32>(), sec_str.parse::<u32>()) {
             return Some(min as f64 + sec as f64 / 60.0);
         }
     }
-    // fallback: decimal minutes
     s.parse::<f64>().ok()
 }
 
@@ -149,7 +190,6 @@ fn main() {
                 .filter_map(|s| {
                     let parts: Vec<_> = s.splitn(2, ':').collect();
                     if parts.len() == 2 {
-                        // Careful: first `:` split is between title and duration, so we rejoin after
                         let title = parts[0].to_string();
                         let duration_str = parts[1];
                         parse_duration(duration_str).map(|duration| Track { title, duration })
@@ -162,52 +202,86 @@ fn main() {
             ctx.add_or_replace_tracklist(name.clone(), parsed_tracks);
             ctx.save(&cli.context);
         }
+        Commands::AddMedium {
+            name,
+            sides,
+            max_duration,
+        } => {
+            let mut ctx = ProgramContext::load_or_create(&cli.context);
+
+            let max_dur = parse_duration(max_duration)
+                .unwrap_or_else(|| panic!("Invalid duration format for max_duration"));
+
+            let medium = Medium {
+                sides: *sides,
+                max_duration_per_side: max_dur,
+            };
+
+            ctx.add_or_replace_medium(name.clone(), medium);
+            ctx.save(&cli.context);
+        }
         Commands::Show => {
             let ctx = ProgramContext::load_or_create(&cli.context);
 
-            if ctx.tracklists.is_empty() {
-                println!("No tracklists in context.");
+            if ctx.tracklists.is_empty() && ctx.mediums.is_empty() {
+                println!("Context is empty.");
                 return;
             }
 
-            for tl in &ctx.tracklists {
-                println!("=== {} ===", tl.name);
+            if !ctx.tracklists.is_empty() {
+                println!("=== Tracklists ===");
+                for tl in &ctx.tracklists {
+                    println!("--- {} ---", tl.name);
 
-                let max_title_len = tl
-                    .tracks
-                    .0
-                    .iter()
-                    .map(|t| t.title.len())
-                    .max()
-                    .unwrap_or(5)
-                    .max("Title".len());
+                    let max_title_len = tl
+                        .tracks
+                        .0
+                        .iter()
+                        .map(|t| t.title.len())
+                        .max()
+                        .unwrap_or(5)
+                        .max("Title".len());
 
-                let mut total_duration: Duration = 0.0;
+                    let mut total_duration: Duration = 0.0;
 
-                println!(
-                    "{:<width$} {:>8}",
-                    "Title",
-                    "Duration",
-                    width = max_title_len
-                );
-                println!("{} {}", "-".repeat(max_title_len), "-".repeat(8));
-
-                for t in &tl.tracks.0 {
                     println!(
                         "{:<width$} {:>8}",
-                        t.title,
-                        format_duration(t.duration),
+                        "Title",
+                        "Duration",
                         width = max_title_len
                     );
-                    total_duration += t.duration;
-                }
+                    println!("{} {}", "-".repeat(max_title_len), "-".repeat(8));
 
-                println!(
-                    "{:<width$} {:>8}",
-                    "TOTAL",
-                    format_duration(total_duration),
-                    width = max_title_len
-                );
+                    for t in &tl.tracks.0 {
+                        println!(
+                            "{:<width$} {:>8}",
+                            t.title,
+                            format_duration(t.duration),
+                            width = max_title_len
+                        );
+                        total_duration += t.duration;
+                    }
+
+                    println!(
+                        "{:<width$} {:>8}",
+                        "TOTAL",
+                        format_duration(total_duration),
+                        width = max_title_len
+                    );
+                    println!();
+                }
+            }
+
+            if !ctx.mediums.is_empty() {
+                println!("=== Mediums ===");
+                for m in &ctx.mediums {
+                    println!(
+                        "{}: {} sides, max duration per side: {}",
+                        m.name,
+                        m.sides,
+                        format_duration(m.max_duration_per_side)
+                    );
+                }
                 println!();
             }
         }
