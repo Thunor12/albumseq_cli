@@ -316,7 +316,11 @@ enum Commands {
         index: usize,
     },
     /// Show the entire context
-    Show,
+    Show {
+        /// Filter what to show: "tracklists", "media", "constraints", or leave empty for all
+        #[arg(short, long)]
+        filter: Option<String>,
+    },
     /// Propose top scoring tracklist permutations for a tracklist & medium
     Propose {
         /// Tracklist name to use
@@ -475,71 +479,32 @@ fn main() {
             println!("{} constraints removed", before_len - ctx.constraints.len());
         }
 
-        Commands::Show => {
+        Commands::Show { filter } => {
             let ctx = ProgramContext::load_or_create(&cli.context);
 
-            if ctx.tracklists.is_empty() && ctx.mediums.is_empty() && ctx.constraints.is_empty() {
-                println!("Context is empty.");
-                return;
-            }
+            let filter = filter.as_deref().unwrap_or("all").to_lowercase();
 
-            if !ctx.tracklists.is_empty() {
-                println!("=== Tracklists ===");
-                for tl in &ctx.tracklists {
-                    println!("-- {} --", tl.name);
-                    let max_title_len = tl
-                        .tracks
-                        .0
-                        .iter()
-                        .map(|t| t.title.len())
-                        .max()
-                        .unwrap_or(5)
-                        .max("Title".len());
-
-                    let mut total_duration: Duration = 0.0;
-
-                    println!(
-                        "{:<width$} {:>8}",
-                        "Title",
-                        "Duration",
-                        width = max_title_len
-                    );
-                    println!("{} {}", "-".repeat(max_title_len), "-".repeat(8));
-
-                    for t in &tl.tracks.0 {
-                        println!(
-                            "{:<width$} {:>8}",
-                            t.title,
-                            format_duration(t.duration),
-                            width = max_title_len
-                        );
-                        total_duration += t.duration;
+            if filter == "all" || filter == "tracklists" {
+                println!("--- Tracklists ---");
+                for (i, tl) in ctx.tracklists.iter().enumerate() {
+                    println!("Tracklist {}:", i);
+                    for track in tl.tracks.0.iter() {
+                        println!("  {} ({})", track.title, track.duration);
                     }
-
-                    println!(
-                        "{:<width$} {:>8}",
-                        "TOTAL",
-                        format_duration(total_duration),
-                        width = max_title_len
-                    );
-                    println!();
                 }
             }
 
-            if !ctx.mediums.is_empty() {
-                println!("=== Mediums ===");
+            if filter == "all" || filter == "media" {
+                println!("--- Media ---");
                 for m in &ctx.mediums {
                     println!(
-                        "{}: {} sides, max duration per side: {}",
-                        m.name,
-                        m.sides,
-                        format_duration(m.max_duration_per_side)
+                        "Medium: {} | Sides: {} | Max per side: {} sec",
+                        m.name, m.sides, m.max_duration_per_side
                     );
                 }
-                println!();
             }
 
-            if !ctx.constraints.is_empty() {
+            if filter == "all" || filter == "constraints" {
                 println!("=== Constraints ===");
                 for c in &ctx.constraints {
                     println!("{:?} (weight {})", c.kind, c.weight);
