@@ -457,15 +457,14 @@ fn main() {
             let mut ctx = ProgramContext::load_or_create(&cli.context);
             let before_len = ctx.constraints.len();
 
-            if index < &ctx.constraints.len() {
-                let c = ctx.constraints[*index].clone();
-                let kind = c.kind;
-                let weight = c.weight;
+            let cc = ctx.constraints.clone();
+            let cc = cc.get(*index);
 
+            if let Some(c) = cc {
                 ctx.constraints.remove(*index);
                 println!("Removed constraint at index {}", index);
                 println!("=== Constraint ===");
-                println!("{:?} (weight {})", kind, weight);
+                println!("{:?} (weight {})", c.kind, c.weight);
                 println!();
             } else {
                 eprintln!("Index out of range");
