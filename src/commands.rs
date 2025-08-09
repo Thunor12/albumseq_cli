@@ -1,5 +1,5 @@
 use crate::context::ProgramContext;
-use crate::utils::{format_duration, parse_duration};
+use crate::utils::format_duration;
 use albumseq::{
     Constraint as AlbumConstraint, ConstraintKind as AlbumConstraintKind, Duration,
     Medium as AlbumMedium, Track, Tracklist, TracklistPermutations, score_tracklist,
