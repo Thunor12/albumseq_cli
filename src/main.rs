@@ -332,8 +332,12 @@ enum Commands {
         medium: String,
 
         /// Number of propositions to show
-        #[arg(short, long, default_value = "5")]
+        #[arg(short, long, default_value = "15")]
         count: usize,
+
+        /// Minimum score to include (optional)
+        #[arg(short = 'm', long)]
+        min_score: Option<usize>,
     },
 }
 
@@ -517,6 +521,7 @@ fn main() {
             tracklist: tracklist_name,
             medium: medium_name,
             count,
+            min_score,
         } => {
             let ctx = ProgramContext::load_or_create(&cli.context);
 
@@ -552,22 +557,31 @@ fn main() {
             // Create permutations iterator
             let perms = TracklistPermutations::new(&tracklist.0);
 
-            // Score permutations and keep top `count` by descending score
+            // Score permutations, filter by min_score if provided, keep top `count` by descending score
             let mut scored_perms: Vec<(usize, Tracklist)> = perms
                 .map(|perm| {
                     let tl = Tracklist(perm.into_iter().cloned().collect());
                     let score = score_tracklist(&tl, &constraints, &medium);
                     (score, tl)
                 })
-                .filter(|(_, tl)| medium.fits(tl))
+                .filter(|(score, tl)| {
+                    medium.fits(tl) && min_score.map_or(true, |min| *score >= min)
+                })
                 .collect();
 
             scored_perms.sort_by(|a, b| b.0.cmp(&a.0)); // descending by score
 
-            println!(
-                "Top {} permutations for tracklist '{}' on medium '{}':",
-                count, tracklist_name, medium_name
-            );
+            if let Some(min) = min_score {
+                println!(
+                    "Top {} permutations for tracklist '{}' on medium '{}' with score >= {}:",
+                    count, tracklist_name, medium_name, min
+                );
+            } else {
+                println!(
+                    "Top {} permutations for tracklist '{}' on medium '{}':",
+                    count, tracklist_name, medium_name
+                );
+            }
 
             for (score, tl) in scored_perms.into_iter().take(*count) {
                 println!("Score: {}", score);
