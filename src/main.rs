@@ -1,231 +1,22 @@
+// mod cli;
+// mod commands;
+mod context;
+mod utils;
+
+// use crate::cli::{Cli, Commands};
+// use crate::commands::handle_propose;
+use crate::context::ProgramContext;
+use crate::utils::{format_duration, parse_duration};
+
 use albumseq::{
     Constraint as AlbumConstraint, ConstraintKind as AlbumConstraintKind, Duration,
     Medium as AlbumMedium, Track, Tracklist, TracklistPermutations, score_tracklist,
 };
 use clap::{Parser, Subcommand};
 
-use serde::{Deserialize, Serialize};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 const DEFAULT_CONTEXT_PATH: &str = "context.json";
-
-/// Serializable Track for saving/loading
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub struct SerTrack {
-    pub title: String,
-    pub duration: Duration,
-}
-
-impl From<&Track> for SerTrack {
-    fn from(t: &Track) -> Self {
-        SerTrack {
-            title: t.title.clone(),
-            duration: t.duration,
-        }
-    }
-}
-
-impl From<&SerTrack> for Track {
-    fn from(st: &SerTrack) -> Self {
-        Track {
-            title: st.title.clone(),
-            duration: st.duration,
-        }
-    }
-}
-
-/// Serializable Tracklist wrapper
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub struct SerTracklist(pub Vec<SerTrack>);
-
-impl From<&Tracklist> for SerTracklist {
-    fn from(tl: &Tracklist) -> Self {
-        SerTracklist(tl.0.iter().map(|t| t.into()).collect())
-    }
-}
-
-impl From<&SerTracklist> for Tracklist {
-    fn from(stl: &SerTracklist) -> Self {
-        Tracklist(stl.0.iter().map(|st| st.into()).collect())
-    }
-}
-
-/// Named Tracklist with a name key
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub struct NamedSerTracklist {
-    pub name: String,
-    pub tracks: SerTracklist,
-}
-
-/// Serializable Medium with name for identification
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub struct SerMedium {
-    pub name: String,
-    pub sides: usize,
-    pub max_duration_per_side: Duration,
-}
-
-impl SerMedium {
-    /// Convert to library Medium (without name)
-    pub fn to_album_medium(&self) -> AlbumMedium {
-        AlbumMedium {
-            sides: self.sides,
-            max_duration_per_side: self.max_duration_per_side,
-            name: self.name.clone(),
-        }
-    }
-}
-
-/// Serializable constraint kinds for saving/loading
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(tag = "kind", content = "data")]
-pub enum SerConstraintKind {
-    AtPosition(String, usize),
-    Adjacent(String, String),
-    OnSameSide(String, String),
-}
-
-/// Serializable constraint with kind and weight
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SerConstraint {
-    pub kind: SerConstraintKind,
-    pub weight: usize,
-}
-
-/// Convert from SerConstraint to albumseq Constraint
-impl From<SerConstraint> for AlbumConstraint {
-    fn from(c: SerConstraint) -> Self {
-        let kind = match c.kind {
-            SerConstraintKind::AtPosition(title, pos) => {
-                AlbumConstraintKind::AtPosition(title, pos)
-            }
-            SerConstraintKind::Adjacent(t1, t2) => AlbumConstraintKind::Adjacent(t1, t2),
-            SerConstraintKind::OnSameSide(t1, t2) => AlbumConstraintKind::OnSameSide(t1, t2),
-        };
-        AlbumConstraint {
-            kind,
-            weight: c.weight,
-        }
-    }
-}
-
-/// Convert from albumseq Constraint to SerConstraint
-impl From<&AlbumConstraint> for SerConstraint {
-    fn from(c: &AlbumConstraint) -> Self {
-        let kind = match &c.kind {
-            AlbumConstraintKind::AtPosition(title, pos) => {
-                SerConstraintKind::AtPosition(title.clone(), *pos)
-            }
-            AlbumConstraintKind::Adjacent(t1, t2) => {
-                SerConstraintKind::Adjacent(t1.clone(), t2.clone())
-            }
-            AlbumConstraintKind::OnSameSide(t1, t2) => {
-                SerConstraintKind::OnSameSide(t1.clone(), t2.clone())
-            }
-        };
-        SerConstraint {
-            kind,
-            weight: c.weight,
-        }
-    }
-}
-
-/// The main program context holding tracklists, mediums, and constraints
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct ProgramContext {
-    pub tracklists: Vec<NamedSerTracklist>,
-    pub mediums: Vec<SerMedium>,
-    pub constraints: Vec<SerConstraint>,
-}
-
-impl ProgramContext {
-    fn load_or_create(path: &Path) -> Self {
-        if path.exists() {
-            let data = fs::read_to_string(path).expect("Failed to read context file");
-            serde_json::from_str(&data).expect("Failed to parse context file")
-        } else {
-            let ctx = Self::default();
-            ctx.save(path);
-            ctx
-        }
-    }
-
-    fn save(&self, path: &Path) {
-        let json = serde_json::to_string_pretty(self).expect("Failed to serialize context");
-        fs::write(path, json).expect("Failed to write context file");
-    }
-
-    /// Add or replace a tracklist by name
-    fn add_or_replace_tracklist(&mut self, name: String, tracks: Vec<Track>) {
-        let new_list = NamedSerTracklist {
-            name: name.clone(),
-            tracks: SerTracklist(tracks.iter().map(|t| t.into()).collect()),
-        };
-
-        if let Some(existing) = self
-            .tracklists
-            .iter_mut()
-            .find(|tl| tl.name.eq_ignore_ascii_case(&name))
-        {
-            *existing = new_list;
-            println!("Replaced tracklist '{}'", name);
-        } else {
-            self.tracklists.push(new_list);
-            println!("Added tracklist '{}'", name);
-        }
-    }
-
-    /// Add or replace a medium by name
-    fn add_or_replace_medium(
-        &mut self,
-        name: String,
-        sides: usize,
-        max_duration_per_side: Duration,
-    ) {
-        let new_medium = SerMedium {
-            name: name.clone(),
-            sides,
-            max_duration_per_side,
-        };
-
-        if let Some(existing) = self
-            .mediums
-            .iter_mut()
-            .find(|m| m.name.eq_ignore_ascii_case(&name))
-        {
-            *existing = new_medium;
-            println!("Replaced medium '{}'", name);
-        } else {
-            self.mediums.push(new_medium);
-            println!("Added medium '{}'", name);
-        }
-    }
-
-    /// Add or replace a constraint
-    fn add_or_replace_constraint(&mut self, constraint: AlbumConstraint) {
-        let ser_constraint = SerConstraint::from(&constraint);
-        let kind = ser_constraint.kind;
-
-        if let Some(existing) = self.constraints.iter_mut().find(|c| c.kind == kind) {
-            *existing = SerConstraint::from(&constraint);
-            println!("Replaced constraint {:?}", kind);
-        } else {
-            self.constraints.push(SerConstraint::from(&constraint));
-            println!("Added constraint {:?}", kind);
-        }
-    }
-}
-
-/// Format a duration in minutes (f64) as "MM:SS"
-fn format_duration(duration: Duration) -> String {
-    let total_seconds = (duration * 60.0).round() as u64;
-    let minutes = total_seconds / 60;
-    let seconds = total_seconds % 60;
-    format!("{:02}:{:02}", minutes, seconds)
-}
 
 /// Helper: Split a tracklist into sides based on medium max duration per side
 fn split_tracklist_by_side<'a>(
@@ -341,17 +132,6 @@ enum Commands {
     },
 }
 
-fn parse_duration(s: &str) -> Option<f64> {
-    if let Some((min_str, sec_str)) = s.split_once(':') {
-        // MM:SS format
-        if let (Ok(min), Ok(sec)) = (min_str.parse::<u32>(), sec_str.parse::<u32>()) {
-            return Some(min as f64 + sec as f64 / 60.0);
-        }
-    }
-    // fallback: decimal minutes
-    s.parse::<f64>().ok()
-}
-
 fn parse_constraint_kind(kind: &str, args: &[String]) -> Option<AlbumConstraintKind> {
     match kind.to_lowercase().as_str() {
         "atpos" => {
@@ -370,7 +150,10 @@ fn parse_constraint_kind(kind: &str, args: &[String]) -> Option<AlbumConstraintK
         }
         "adjacent" => {
             if args.len() == 2 {
-                Some(AlbumConstraintKind::Adjacent(args[0].clone(), args[1].clone()))
+                Some(AlbumConstraintKind::Adjacent(
+                    args[0].clone(),
+                    args[1].clone(),
+                ))
             } else {
                 eprintln!("Adjacent constraint requires exactly 2 arguments: title1 title2");
                 None
@@ -378,7 +161,10 @@ fn parse_constraint_kind(kind: &str, args: &[String]) -> Option<AlbumConstraintK
         }
         "onsameside" => {
             if args.len() == 2 {
-                Some(AlbumConstraintKind::OnSameSide(args[0].clone(), args[1].clone()))
+                Some(AlbumConstraintKind::OnSameSide(
+                    args[0].clone(),
+                    args[1].clone(),
+                ))
             } else {
                 eprintln!("OnSameSide constraint requires exactly 2 arguments: title1 title2");
                 None
@@ -439,9 +225,7 @@ fn handle_propose(
             let score = score_tracklist(&tl, &constraints, &medium);
             (score, tl)
         })
-        .filter(|(score, tl)| {
-            medium.fits(tl) && min_score.map_or(true, |min| *score >= min)
-        })
+        .filter(|(score, tl)| medium.fits(tl) && min_score.map_or(true, |min| *score >= min))
         .collect();
 
     scored_perms.sort_by(|a, b| b.0.cmp(&a.0)); // descending by score
