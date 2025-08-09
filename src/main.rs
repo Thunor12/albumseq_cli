@@ -296,7 +296,7 @@ enum Commands {
         #[arg(short = 'd', long)]
         max_duration: String,
     },
-    /// Add or replace a constraint
+    /// Add a constraint
     AddConstraint {
         /// Constraint kind: "atpos", "adjacent", or "onsameside"
         #[arg(short, long)]
@@ -309,6 +309,11 @@ enum Commands {
         /// Weight of the constraint
         #[arg(short, long, default_value = "1")]
         weight: usize,
+    },
+    /// Remove a constraint
+    RemoveConstraint {
+        #[arg(long)]
+        index: usize,
     },
     /// Show the entire context
     Show,
@@ -446,6 +451,29 @@ fn main() {
                 ctx.add_or_replace_constraint(constraint);
                 ctx.save(&cli.context);
             }
+        }
+
+        Commands::RemoveConstraint { index } => {
+            let mut ctx = ProgramContext::load_or_create(&cli.context);
+            let before_len = ctx.constraints.len();
+
+            if index < &ctx.constraints.len() {
+                let c = ctx.constraints[*index].clone();
+                let kind = c.kind;
+                let weight = c.weight;
+
+                ctx.constraints.remove(*index);
+                println!("Removed constraint at index {}", index);
+                println!("=== Constraint ===");
+                println!("{:?} (weight {})", kind, weight);
+                println!();
+            } else {
+                eprintln!("Index out of range");
+                return;
+            }
+
+            ctx.save(&cli.context);
+            println!("{} constraints removed", before_len - ctx.constraints.len());
         }
 
         Commands::Show => {
