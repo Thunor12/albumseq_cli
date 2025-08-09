@@ -352,6 +352,156 @@ fn parse_duration(s: &str) -> Option<f64> {
     s.parse::<f64>().ok()
 }
 
+fn parse_constraint_kind(kind: &str, args: &[String]) -> Option<AlbumConstraintKind> {
+    match kind.to_lowercase().as_str() {
+        "atpos" => {
+            if args.len() == 2 {
+                let pos = args[1].parse::<usize>();
+                if let Ok(pos) = pos {
+                    Some(AlbumConstraintKind::AtPosition(args[0].clone(), pos))
+                } else {
+                    eprintln!("Invalid position number: {}", args[1]);
+                    None
+                }
+            } else {
+                eprintln!("AtPosition constraint requires exactly 2 arguments: title pos");
+                None
+            }
+        }
+        "adjacent" => {
+            if args.len() == 2 {
+                Some(AlbumConstraintKind::Adjacent(args[0].clone(), args[1].clone()))
+            } else {
+                eprintln!("Adjacent constraint requires exactly 2 arguments: title1 title2");
+                None
+            }
+        }
+        "onsameside" => {
+            if args.len() == 2 {
+                Some(AlbumConstraintKind::OnSameSide(args[0].clone(), args[1].clone()))
+            } else {
+                eprintln!("OnSameSide constraint requires exactly 2 arguments: title1 title2");
+                None
+            }
+        }
+        _ => {
+            eprintln!("Unknown constraint kind: {}", kind);
+            None
+        }
+    }
+}
+
+fn handle_propose(
+    cli: &Cli,
+    tracklist_name: &str,
+    medium_name: &str,
+    count: &usize,
+    min_score: &Option<usize>,
+) {
+    let ctx = ProgramContext::load_or_create(&cli.context);
+
+    // Find the tracklist by name
+    let ser_tl = ctx
+        .tracklists
+        .iter()
+        .find(|tl| tl.name.eq_ignore_ascii_case(tracklist_name));
+
+    if ser_tl.is_none() {
+        eprintln!("Tracklist '{}' not found", tracklist_name);
+        return;
+    }
+    let ser_tl = ser_tl.unwrap();
+    let tracklist = Tracklist::from(&ser_tl.tracks);
+
+    // Find the medium by name
+    let ser_medium = ctx
+        .mediums
+        .iter()
+        .find(|m| m.name.eq_ignore_ascii_case(medium_name));
+    if ser_medium.is_none() {
+        eprintln!("Medium '{}' not found", medium_name);
+        return;
+    }
+    let ser_medium = ser_medium.unwrap();
+    let medium = ser_medium.to_album_medium();
+
+    // Convert constraints to albumseq constraints
+    let constraints: Vec<AlbumConstraint> =
+        ctx.constraints.iter().cloned().map(|c| c.into()).collect();
+
+    // Create permutations iterator
+    let perms = TracklistPermutations::new(&tracklist.0);
+
+    // Score permutations, filter by min_score if provided, keep top `count` by descending score
+    let mut scored_perms: Vec<(usize, Tracklist)> = perms
+        .map(|perm| {
+            let tl = Tracklist(perm.into_iter().cloned().collect());
+            let score = score_tracklist(&tl, &constraints, &medium);
+            (score, tl)
+        })
+        .filter(|(score, tl)| {
+            medium.fits(tl) && min_score.map_or(true, |min| *score >= min)
+        })
+        .collect();
+
+    scored_perms.sort_by(|a, b| b.0.cmp(&a.0)); // descending by score
+
+    if let Some(min) = min_score {
+        println!(
+            "Top {} permutations for tracklist '{}' on medium '{}' with score >= {}:",
+            count, tracklist_name, medium_name, min
+        );
+    } else {
+        println!(
+            "Top {} permutations for tracklist '{}' on medium '{}':",
+            count, tracklist_name, medium_name
+        );
+    }
+
+    for (score, tl) in scored_perms.into_iter().take(*count) {
+        println!("Score: {}", score);
+
+        let max_title_len =
+            tl.0.iter()
+                .map(|t| t.title.len())
+                .max()
+                .unwrap_or(5)
+                .max("Title".len());
+
+        println!(
+            "{:<width$} {:>8}",
+            "Title",
+            "Duration",
+            width = max_title_len
+        );
+        println!("{} {}", "-".repeat(max_title_len), "-".repeat(8));
+
+        let sides = split_tracklist_by_side(&tl, &medium);
+
+        for (side_idx, side_tracks) in sides.iter().enumerate() {
+            println!("----- side {} --------", side_idx);
+            for t in side_tracks {
+                println!(
+                    "{:<width$} {:>8}",
+                    t.title,
+                    format_duration(t.duration),
+                    width = max_title_len
+                );
+            }
+        }
+
+        let total_duration: Duration = tl.0.iter().map(|t| t.duration).sum();
+
+        println!(
+            "{:<width$} {:>8}",
+            "TOTAL",
+            format_duration(total_duration),
+            width = max_title_len
+        );
+        println!();
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -404,54 +554,7 @@ fn main() {
         Commands::AddConstraint { kind, args, weight } => {
             let mut ctx = ProgramContext::load_or_create(&cli.context);
 
-            let constraint_kind_opt = match kind.to_lowercase().as_str() {
-                "atpos" => {
-                    if args.len() == 2 {
-                        let pos = args[1].parse::<usize>();
-                        if let Ok(pos) = pos {
-                            Some(AlbumConstraintKind::AtPosition(args[0].clone(), pos))
-                        } else {
-                            eprintln!("Invalid position number: {}", args[1]);
-                            None
-                        }
-                    } else {
-                        eprintln!("AtPosition constraint requires exactly 2 arguments: title pos");
-                        None
-                    }
-                }
-                "adjacent" => {
-                    if args.len() == 2 {
-                        Some(AlbumConstraintKind::Adjacent(
-                            args[0].clone(),
-                            args[1].clone(),
-                        ))
-                    } else {
-                        eprintln!(
-                            "Adjacent constraint requires exactly 2 arguments: title1 title2"
-                        );
-                        None
-                    }
-                }
-                "onsameside" => {
-                    if args.len() == 2 {
-                        Some(AlbumConstraintKind::OnSameSide(
-                            args[0].clone(),
-                            args[1].clone(),
-                        ))
-                    } else {
-                        eprintln!(
-                            "OnSameSide constraint requires exactly 2 arguments: title1 title2"
-                        );
-                        None
-                    }
-                }
-                _ => {
-                    eprintln!("Unknown constraint kind: {}", kind);
-                    None
-                }
-            };
-
-            if let Some(kind) = constraint_kind_opt {
+            if let Some(kind) = parse_constraint_kind(kind, args) {
                 let constraint = AlbumConstraint {
                     kind,
                     weight: *weight,
@@ -518,113 +621,12 @@ fn main() {
         }
 
         Commands::Propose {
-            tracklist: tracklist_name,
-            medium: medium_name,
+            tracklist,
+            medium,
             count,
             min_score,
         } => {
-            let ctx = ProgramContext::load_or_create(&cli.context);
-
-            // Find the tracklist by name
-            let ser_tl = ctx
-                .tracklists
-                .iter()
-                .find(|tl| tl.name.eq_ignore_ascii_case(tracklist_name));
-
-            if ser_tl.is_none() {
-                eprintln!("Tracklist '{}' not found", tracklist_name);
-                return;
-            }
-            let ser_tl = ser_tl.unwrap();
-            let tracklist = Tracklist::from(&ser_tl.tracks);
-
-            // Find the medium by name
-            let ser_medium = ctx
-                .mediums
-                .iter()
-                .find(|m| m.name.eq_ignore_ascii_case(medium_name));
-            if ser_medium.is_none() {
-                eprintln!("Medium '{}' not found", medium_name);
-                return;
-            }
-            let ser_medium = ser_medium.unwrap();
-            let medium = ser_medium.to_album_medium();
-
-            // Convert constraints to albumseq constraints
-            let constraints: Vec<AlbumConstraint> =
-                ctx.constraints.iter().cloned().map(|c| c.into()).collect();
-
-            // Create permutations iterator
-            let perms = TracklistPermutations::new(&tracklist.0);
-
-            // Score permutations, filter by min_score if provided, keep top `count` by descending score
-            let mut scored_perms: Vec<(usize, Tracklist)> = perms
-                .map(|perm| {
-                    let tl = Tracklist(perm.into_iter().cloned().collect());
-                    let score = score_tracklist(&tl, &constraints, &medium);
-                    (score, tl)
-                })
-                .filter(|(score, tl)| {
-                    medium.fits(tl) && min_score.map_or(true, |min| *score >= min)
-                })
-                .collect();
-
-            scored_perms.sort_by(|a, b| b.0.cmp(&a.0)); // descending by score
-
-            if let Some(min) = min_score {
-                println!(
-                    "Top {} permutations for tracklist '{}' on medium '{}' with score >= {}:",
-                    count, tracklist_name, medium_name, min
-                );
-            } else {
-                println!(
-                    "Top {} permutations for tracklist '{}' on medium '{}':",
-                    count, tracklist_name, medium_name
-                );
-            }
-
-            for (score, tl) in scored_perms.into_iter().take(*count) {
-                println!("Score: {}", score);
-
-                let max_title_len =
-                    tl.0.iter()
-                        .map(|t| t.title.len())
-                        .max()
-                        .unwrap_or(5)
-                        .max("Title".len());
-
-                println!(
-                    "{:<width$} {:>8}",
-                    "Title",
-                    "Duration",
-                    width = max_title_len
-                );
-                println!("{} {}", "-".repeat(max_title_len), "-".repeat(8));
-
-                let sides = split_tracklist_by_side(&tl, &medium);
-
-                for (side_idx, side_tracks) in sides.iter().enumerate() {
-                    println!("----- side {} --------", side_idx);
-                    for t in side_tracks {
-                        println!(
-                            "{:<width$} {:>8}",
-                            t.title,
-                            format_duration(t.duration),
-                            width = max_title_len
-                        );
-                    }
-                }
-
-                let total_duration: Duration = tl.0.iter().map(|t| t.duration).sum();
-
-                println!(
-                    "{:<width$} {:>8}",
-                    "TOTAL",
-                    format_duration(total_duration),
-                    width = max_title_len
-                );
-                println!();
-            }
+            handle_propose(&cli, tracklist, medium, count, min_score);
         }
     }
 }
