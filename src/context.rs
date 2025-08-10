@@ -7,6 +7,8 @@ use albumseq::{
     Medium as AlbumMedium, Track, Tracklist,
 };
 
+pub const DEFAULT_CONTEXT_PATH: &str = "context.json";
+
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct SerTrack {
     pub title: String,

@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use crate::context::DEFAULT_CONTEXT_PATH;
 use std::path::PathBuf;
 
 const DEFAULT_CONTEXT_PATH: &str = "context.json";
