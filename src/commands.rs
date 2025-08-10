@@ -16,6 +16,7 @@ use albumseq::{
     Constraint as AlbumConstraint, ConstraintKind as AlbumConstraintKind, Duration,
     Medium as AlbumMedium, Track, Tracklist, TracklistPermutations, score_tracklist,
 };
+use colored::*; // Add this at the top for colored output
 
 /// Parses a constraint kind and its arguments from CLI input.
 /// Returns `Some(AlbumConstraintKind)` if parsing is successful, or `None` if invalid.
@@ -248,54 +249,86 @@ pub fn handle_propose(
 
     if let Some(min) = min_score {
         println!(
-            "Top {} permutations for tracklist '{}' on medium '{}' with score >= {}:",
-            count, tracklist_name, medium_name, min
+            "{}",
+            format!(
+                "Top {} permutations for tracklist '{}' on medium '{}' with score >= {}:",
+                count, tracklist_name, medium_name, min
+            )
+            .bold()
+            .cyan()
         );
     } else {
         println!(
-            "Top {} permutations for tracklist '{}' on medium '{}':",
-            count, tracklist_name, medium_name
+            "{}",
+            format!(
+                "Top {} permutations for tracklist '{}' on medium '{}':",
+                count, tracklist_name, medium_name
+            )
+            .bold()
+            .cyan()
         );
     }
 
-    for (score, tl) in scored_perms.into_iter().take(*count) {
-        println!("Score: {}", score);
-
-        let max_title_len =
-            tl.0.iter()
-                .map(|t| t.title.len())
-                .max()
-                .unwrap_or(5)
-                .max("Title".len());
-
+    for (idx, (score, tl)) in scored_perms.into_iter().take(*count).enumerate() {
         println!(
-            "{:<width$} {:>8}",
-            "Title",
-            "Duration",
+            "{} {}",
+            "Permutation".yellow().bold(),
+            format!("#{}", idx + 1).yellow().bold()
+        );
+        println!("{} {}", "Score:".green().bold(), score.to_string().green().bold());
+
+        let max_title_len = tl
+            .0
+            .iter()
+            .map(|t| t.title.len())
+            .max()
+            .unwrap_or(5)
+            .max("Title".len());
+
+        // Table header
+        println!(
+            "{:<3} {:<width$} {:>8}",
+            "#",
+            "Title".bold(),
+            "Duration".bold(),
             width = max_title_len
         );
-        println!("{} {}", "-".repeat(max_title_len), "-".repeat(8));
+        println!(
+            "{:-<3} {:-<width$} {:-<8}",
+            "",
+            "",
+            "",
+            width = max_title_len
+        );
 
         let sides = split_tracklist_by_side(&tl, &medium);
 
+        let mut track_idx = 1;
         for (side_idx, side_tracks) in sides.iter().enumerate() {
-            println!("----- side {} --------", side_idx);
+            println!(
+                "{} {}",
+                "Side".blue().bold(),
+                format!("{}", side_idx + 1).blue().bold()
+            );
             for t in side_tracks {
                 println!(
-                    "{:<width$} {:>8}",
-                    t.title,
+                    "{:<3} {:<width$} {:>8}",
+                    track_idx,
+                    t.title.clone(),
                     format_duration(t.duration),
                     width = max_title_len
                 );
+                track_idx += 1;
             }
         }
 
         let total_duration: Duration = tl.0.iter().map(|t| t.duration).sum();
 
         println!(
-            "{:<width$} {:>8}",
-            "TOTAL",
-            format_duration(total_duration),
+            "{:<3} {:<width$} {:>8}",
+            "",
+            "TOTAL".bold(),
+            format_duration(total_duration).bold(),
             width = max_title_len
         );
         println!();
