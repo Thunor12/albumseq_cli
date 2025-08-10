@@ -1,3 +1,15 @@
+//! # Command Handlers
+//!
+//! This module contains functions that implement the logic for each CLI command.
+//! Each handler is responsible for updating the context, performing calculations,
+//! or displaying output as needed.
+//!
+//! ## Example
+//! ```rust
+//! handle_add_tracklist(&mut ctx, &name, tracks);
+//! handle_propose(&ctx, &tracklist, &medium, &count, &min_score);
+//! ```
+
 use crate::context::ProgramContext;
 use crate::utils::format_duration;
 use albumseq::{
@@ -5,7 +17,8 @@ use albumseq::{
     Medium as AlbumMedium, Track, Tracklist, TracklistPermutations, score_tracklist,
 };
 
-/// Parse a constraint kind and its arguments
+/// Parses a constraint kind and its arguments from CLI input.
+/// Returns `Some(AlbumConstraintKind)` if parsing is successful, or `None` if invalid.
 fn parse_constraint_kind(kind: &str, args: &[String]) -> Option<AlbumConstraintKind> {
     match kind.to_lowercase().as_str() {
         "atpos" => {
@@ -51,7 +64,8 @@ fn parse_constraint_kind(kind: &str, args: &[String]) -> Option<AlbumConstraintK
     }
 }
 
-/// Helper: Split a tracklist into sides based on medium max duration per side
+/// Splits a tracklist into sides based on medium max duration per side.
+/// Returns a vector of vectors, each representing a side.
 fn split_tracklist_by_side<'a>(
     tracklist: &'a Tracklist,
     medium: &'a AlbumMedium,
@@ -82,12 +96,16 @@ fn split_tracklist_by_side<'a>(
     sides
 }
 
+/// Handles adding a new tracklist to the context.
+/// Returns true if the tracklist was added or replaced.
 pub fn handle_add_tracklist(ctx: &mut ProgramContext, name: &String, tracks: Vec<Track>) -> bool {
     ctx.add_or_replace_tracklist(name.clone(), tracks);
 
     true
 }
 
+/// Handles adding a new medium to the context.
+/// Returns true if the medium was added or replaced.
 pub fn handle_add_medium(
     ctx: &mut ProgramContext,
     name: &String,
@@ -99,6 +117,8 @@ pub fn handle_add_medium(
     true
 }
 
+/// Handles adding a constraint to the context.
+/// Returns true if the constraint was added.
 pub fn handle_add_constraint(
     ctx: &mut ProgramContext,
     kind: &String,
@@ -117,6 +137,8 @@ pub fn handle_add_constraint(
     false
 }
 
+/// Handles removing a constraint from the context by index.
+/// Returns true if the constraint was removed.
 pub fn handle_remove_constraint(ctx: &mut ProgramContext, index: &usize) -> bool {
     let before_len = ctx.constraints.len();
 
@@ -139,6 +161,7 @@ pub fn handle_remove_constraint(ctx: &mut ProgramContext, index: &usize) -> bool
     true
 }
 
+/// Handles displaying the context or filtered parts of it.
 pub fn handle_show(ctx: &ProgramContext, filter: &Option<String>) {
     let filter = filter.as_deref().unwrap_or("all").to_lowercase();
 
@@ -171,6 +194,7 @@ pub fn handle_show(ctx: &ProgramContext, filter: &Option<String>) {
     }
 }
 
+/// Handles proposing top scoring tracklist permutations for a tracklist & medium.
 pub fn handle_propose(
     ctx: &ProgramContext,
     tracklist_name: &str,
