@@ -1,14 +1,31 @@
-use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::Path;
+//! # Context Serialization and Management
+//!
+//! This module defines the data structures for the persistent context used by albumseq_cli.
+//! It provides serialization/deserialization for tracklists, media, and constraints,
+//! as well as loading and saving the context to disk.
+//!
+//! ## Main Types
+//! - [`ProgramContext`]: The root struct containing all user data.
+//! - [`SerTrack`], [`SerTracklist`], [`NamedSerTracklist`], [`SerMedium`], [`SerConstraint`]: Serializable forms of album data.
+//!
+//! ## Example
+//! ```rust
+//! let ctx = ProgramContext::load_or_create("context.json");
+//! ctx.save("context.json");
+//! ```
 
 use albumseq::{
     Constraint as AlbumConstraint, ConstraintKind as AlbumConstraintKind, Duration,
     Medium as AlbumMedium, Track, Tracklist,
 };
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
 
+/// The default path for the context file.
 pub const DEFAULT_CONTEXT_PATH: &str = "context.json";
 
+/// Serializable representation of a track.
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct SerTrack {
     pub title: String,
@@ -16,44 +33,51 @@ pub struct SerTrack {
 }
 
 impl From<&Track> for SerTrack {
-    fn from(t: &Track) -> Self {
+    /// Converts a reference to a `Track` into a `SerTrack`.
+    fn from(track: &Track) -> Self {
         SerTrack {
-            title: t.title.clone(),
-            duration: t.duration,
+            title: track.title.clone(),
+            duration: track.duration,
         }
     }
 }
 
 impl From<&SerTrack> for Track {
-    fn from(st: &SerTrack) -> Self {
+    /// Converts a reference to a `SerTrack` into a `Track`.
+    fn from(sert: &SerTrack) -> Self {
         Track {
-            title: st.title.clone(),
-            duration: st.duration,
+            title: sert.title.clone(),
+            duration: sert.duration,
         }
     }
 }
 
+/// Serializable representation of a tracklist.
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct SerTracklist(pub Vec<SerTrack>);
 
 impl From<&Tracklist> for SerTracklist {
+    /// Converts a reference to a `Tracklist` into a `SerTracklist`.
     fn from(tl: &Tracklist) -> Self {
         SerTracklist(tl.0.iter().map(|t| t.into()).collect())
     }
 }
 
 impl From<&SerTracklist> for Tracklist {
-    fn from(stl: &SerTracklist) -> Self {
-        Tracklist(stl.0.iter().map(|st| st.into()).collect())
+    /// Converts a reference to a `SerTracklist` into a `Tracklist`.
+    fn from(sertl: &SerTracklist) -> Self {
+        Tracklist(sertl.0.iter().map(|st| st.into()).collect())
     }
 }
 
+/// A named tracklist for storage in the context.
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct NamedSerTracklist {
     pub name: String,
     pub tracks: SerTracklist,
 }
 
+/// Serializable representation of a medium (e.g., vinyl, CD).
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct SerMedium {
     pub name: String,
@@ -62,7 +86,7 @@ pub struct SerMedium {
 }
 
 impl SerMedium {
-    /// Convert to library Medium (without name)
+    /// Converts this `SerMedium` into an `AlbumMedium`.
     pub fn to_album_medium(&self) -> AlbumMedium {
         AlbumMedium {
             sides: self.sides,
@@ -72,6 +96,7 @@ impl SerMedium {
     }
 }
 
+/// Serializable constraint kind.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "kind", content = "data")]
 pub enum SerConstraintKind {
@@ -80,16 +105,17 @@ pub enum SerConstraintKind {
     OnSameSide(String, String),
 }
 
+/// Serializable constraint with weight.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SerConstraint {
     pub kind: SerConstraintKind,
     pub weight: usize,
 }
 
-/// Convert from SerConstraint to albumseq Constraint
+/// Convert from SerConstraint to albumseq Constraint.
 impl From<SerConstraint> for AlbumConstraint {
-    fn from(c: SerConstraint) -> Self {
-        let kind = match c.kind {
+    fn from(serc: SerConstraint) -> Self {
+        let kind = match serc.kind {
             SerConstraintKind::AtPosition(title, pos) => {
                 AlbumConstraintKind::AtPosition(title, pos)
             }
@@ -98,12 +124,12 @@ impl From<SerConstraint> for AlbumConstraint {
         };
         AlbumConstraint {
             kind,
-            weight: c.weight,
+            weight: serc.weight,
         }
     }
 }
 
-/// Convert from albumseq Constraint to SerConstraint
+/// Convert from albumseq Constraint to SerConstraint.
 impl From<&AlbumConstraint> for SerConstraint {
     fn from(c: &AlbumConstraint) -> Self {
         let kind = match &c.kind {
@@ -124,6 +150,7 @@ impl From<&AlbumConstraint> for SerConstraint {
     }
 }
 
+/// The persistent context for the CLI, containing all tracklists, media, and constraints.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ProgramContext {
     pub tracklists: Vec<NamedSerTracklist>,
@@ -132,8 +159,9 @@ pub struct ProgramContext {
 }
 
 impl ProgramContext {
-    pub fn load_or_create(path: &Path) -> Self {
-        if path.exists() {
+    /// Loads the context from the given path, or creates a new one if it doesn't exist.
+    pub fn load_or_create<P: AsRef<Path>>(path: P) -> Self {
+        if path.as_ref().exists() {
             let data = fs::read_to_string(path).expect("Failed to read context file");
             serde_json::from_str(&data).expect("Failed to parse context file")
         } else {
@@ -143,7 +171,8 @@ impl ProgramContext {
         }
     }
 
-    pub fn save(&self, path: &Path) {
+    /// Saves the context to the given path.
+    pub fn save<P: AsRef<Path>>(&self, path: P) {
         let json = serde_json::to_string_pretty(self).expect("Failed to serialize context");
         fs::write(path, json).expect("Failed to write context file");
     }
