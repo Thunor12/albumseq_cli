@@ -16,7 +16,8 @@ use albumseq::{
     Constraint as AlbumConstraint, ConstraintKind as AlbumConstraintKind, Duration,
     Medium as AlbumMedium, Track, Tracklist, TracklistPermutations, score_tracklist,
 };
-use colored::*; // Add this at the top for colored output
+use colored::*;
+use prettytable::{Cell, Row, Table, format};
 
 /// Parses a constraint kind and its arguments from CLI input.
 /// Returns `Some(AlbumConstraintKind)` if parsing is successful, or `None` if invalid.
@@ -163,39 +164,100 @@ pub fn handle_remove_constraint(ctx: &mut ProgramContext, index: &usize) -> bool
 }
 
 /// Handles displaying the context or filtered parts of it.
+/// Now with prettytable output for tracklists, media, and constraints.
 pub fn handle_show(ctx: &ProgramContext, filter: &Option<String>) {
-    let filter = filter.as_deref().unwrap_or("all").to_lowercase();
+    let filter = filter.as_ref().map(|s| s.to_lowercase());
 
-    if filter == "all" || filter == "tracklists" {
-        println!("--- Tracklists ---");
-        for (i, tl) in ctx.tracklists.iter().enumerate() {
-            println!("Tracklist {}:", i);
-            for track in tl.tracks.0.iter() {
-                println!("  {} ({})", track.title, track.duration);
+    // Show tracklists
+    if filter.is_none() || filter.as_deref() == Some("tracklists") {
+        println!("{}", "Tracklists:".bold().cyan());
+        for tl in &ctx.tracklists {
+            println!("{}", format!("Tracklist: {}", tl.name).bold().yellow());
+            let tracks = &tl.tracks.0;
+            if tracks.is_empty() {
+                println!("  (empty)");
+                continue;
             }
+            let mut table = Table::new();
+            table.set_format(*format::consts::FORMAT_NO_LINESEP_WITH_TITLE);
+            table.set_titles(Row::new(vec![
+                Cell::new("#").style_spec("bFc"),
+                Cell::new("Title").style_spec("bFc"),
+                Cell::new("Duration").style_spec("bFc"),
+            ]));
+            for (i, t) in tracks.iter().enumerate() {
+                table.add_row(Row::new(vec![
+                    Cell::new(&format!("{}", i + 1)),
+                    Cell::new(&t.title),
+                    Cell::new(&crate::utils::format_duration(t.duration)),
+                ]));
+            }
+            table.printstd();
+            println!();
         }
     }
 
-    if filter == "all" || filter == "media" {
-        println!("--- Media ---");
+    // Show media
+    if filter.is_none()
+        || filter.as_deref() == Some("media")
+        || filter.as_deref() == Some("mediums")
+    {
+        println!("{}", "Media:".bold().cyan());
+        let mut table = Table::new();
+        table.set_format(*format::consts::FORMAT_NO_LINESEP_WITH_TITLE);
+        table.set_titles(Row::new(vec![
+            Cell::new("Name").style_spec("bFc"),
+            Cell::new("Sides").style_spec("bFc"),
+            Cell::new("Max Duration/Side").style_spec("bFc"),
+        ]));
         for m in &ctx.mediums {
-            println!(
-                "Medium: {} | Sides: {} | Max per side: {} sec",
-                m.name, m.sides, m.max_duration_per_side
-            );
+            table.add_row(Row::new(vec![
+                Cell::new(&m.name),
+                Cell::new(&format!("{}", m.sides)),
+                Cell::new(&crate::utils::format_duration(m.max_duration_per_side)),
+            ]));
         }
+        table.printstd();
+        println!();
     }
 
-    if filter == "all" || filter == "constraints" {
-        println!("=== Constraints ===");
-        for c in &ctx.constraints {
-            println!("{:?} (weight {})", c.kind, c.weight);
+    // Show constraints
+    if filter.is_none() || filter.as_deref() == Some("constraints") {
+        println!("{}", "Constraints:".bold().cyan());
+        let mut table = Table::new();
+        table.set_format(*format::consts::FORMAT_NO_LINESEP_WITH_TITLE);
+        table.set_titles(Row::new(vec![
+            Cell::new("Index").style_spec("bFc"),
+            Cell::new("Kind").style_spec("bFc"),
+            Cell::new("Args").style_spec("bFc"),
+            Cell::new("Weight").style_spec("bFc"),
+        ]));
+        for (i, c) in ctx.constraints.iter().enumerate() {
+            let (kind, args) = match &c.kind {
+                crate::context::SerConstraintKind::AtPosition(title, pos) => {
+                    ("AtPosition", format!("{} @ {}", title, pos))
+                }
+                crate::context::SerConstraintKind::Adjacent(a, b) => {
+                    ("Adjacent", format!("{}, {}", a, b))
+                }
+                crate::context::SerConstraintKind::OnSameSide(a, b) => {
+                    ("OnSameSide", format!("{}, {}", a, b))
+                }
+            };
+            table.add_row(Row::new(vec![
+                Cell::new(&format!("{}", i)),
+                Cell::new(kind),
+                Cell::new(&args),
+                Cell::new(&format!("{}", c.weight)),
+            ]));
         }
+        table.printstd();
         println!();
     }
 }
 
 /// Handles proposing top scoring tracklist permutations for a tracklist & medium.
+/// Now with prettytable output.
 pub fn handle_propose(
     ctx: &ProgramContext,
     tracklist_name: &str,
@@ -275,62 +337,46 @@ pub fn handle_propose(
             "Permutation".yellow().bold(),
             format!("#{}", idx + 1).yellow().bold()
         );
-        println!("{} {}", "Score:".green().bold(), score.to_string().green().bold());
-
-        let max_title_len = tl
-            .0
-            .iter()
-            .map(|t| t.title.len())
-            .max()
-            .unwrap_or(5)
-            .max("Title".len());
-
-        // Table header
         println!(
-            "{:<3} {:<width$} {:>8}",
-            "#",
-            "Title".bold(),
-            "Duration".bold(),
-            width = max_title_len
-        );
-        println!(
-            "{:-<3} {:-<width$} {:-<8}",
-            "",
-            "",
-            "",
-            width = max_title_len
+            "{} {}",
+            "Score:".green().bold(),
+            score.to_string().green().bold()
         );
 
         let sides = split_tracklist_by_side(&tl, &medium);
 
+        let mut table = Table::new();
+        table.set_format(*format::consts::FORMAT_BOX_CHARS);
+        table.set_titles(Row::new(vec![
+            Cell::new("#").style_spec("bFc"),
+            Cell::new("Title").style_spec("bFc"),
+            Cell::new("Duration").style_spec("bFc"),
+            Cell::new("Side").style_spec("bFc"),
+        ]));
+
         let mut track_idx = 1;
         for (side_idx, side_tracks) in sides.iter().enumerate() {
-            println!(
-                "{} {}",
-                "Side".blue().bold(),
-                format!("{}", side_idx + 1).blue().bold()
-            );
             for t in side_tracks {
-                println!(
-                    "{:<3} {:<width$} {:>8}",
-                    track_idx,
-                    t.title.clone(),
-                    format_duration(t.duration),
-                    width = max_title_len
-                );
+                table.add_row(Row::new(vec![
+                    Cell::new(&format!("{}", track_idx)),
+                    Cell::new(&t.title),
+                    Cell::new(&format_duration(t.duration)),
+                    Cell::new(&format!("{}", side_idx + 1)),
+                ]));
                 track_idx += 1;
             }
         }
 
+        // Add total row
         let total_duration: Duration = tl.0.iter().map(|t| t.duration).sum();
+        table.add_row(Row::new(vec![
+            Cell::new(""),
+            Cell::new("TOTAL").style_spec("bFc"),
+            Cell::new(&format_duration(total_duration)).style_spec("bFc"),
+            Cell::new(""),
+        ]));
 
-        println!(
-            "{:<3} {:<width$} {:>8}",
-            "",
-            "TOTAL".bold(),
-            format_duration(total_duration).bold(),
-            width = max_title_len
-        );
+        table.printstd();
         println!();
     }
 }
