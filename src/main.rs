@@ -1,3 +1,20 @@
+//! # albumseq_cli Main Entry Point
+//!
+//! **Mission:**  
+//! `albumseq_cli` helps musicians, producers, and collectors sequence album tracks for physical media (like vinyl, cassette, or CD) by optimizing track order and side splits according to user-defined constraints and media limitations.
+//!
+//! This is the main entry point for the albumseq_cli application.
+//! It parses command-line arguments, loads or creates the persistent context, and
+//! dispatches to the appropriate command handler.
+//!
+//! ## Example
+//! ```sh
+//! albumseq_cli add-tracklist --name "MyPlaylist" --tracks "Intro:3:30" "Song 1:4.2"
+//! albumseq_cli add-medium --name "Vinyl" --sides 2 --max-duration 20:00
+//! albumseq_cli add-constraint --kind atpos --args Intro 0 --weight 50
+//! albumseq_cli propose --tracklist "MyAlbum" --medium "Vinyl" --count 10
+//! ```
+
 mod cli;
 mod commands;
 mod context;
