@@ -19,8 +19,8 @@ use albumseq::{
     Medium as AlbumMedium, Track, Tracklist,
 };
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::Path;
+use std::{fs, vec};
 
 /// The default path for the context file.
 pub const DEFAULT_CONTEXT_PATH: &str = "context.json";
@@ -161,14 +161,16 @@ pub struct ProgramContext {
 impl ProgramContext {
     /// Loads the context from the given path, or creates a new one if it doesn't exist.
     pub fn load_or_create<P: AsRef<Path>>(path: P) -> Self {
+        let mut ctx = Self::default();
+
         if path.as_ref().exists() {
             let data = fs::read_to_string(path).expect("Failed to read context file");
-            serde_json::from_str(&data).expect("Failed to parse context file")
+            ctx = serde_json::from_str(&data).expect("Failed to parse context file");
         } else {
-            let ctx = Self::default();
-            ctx.save(path);
-            ctx
+            ctx.save(DEFAULT_CONTEXT_PATH);
         }
+
+        return ctx;
     }
 
     /// Saves the context to the given path.
@@ -240,7 +242,10 @@ impl ProgramContext {
 
 impl Default for ProgramContext {
     fn default() -> Self {
-        let path = Path::new("context.json");
-        Self::load_or_create(path)
+        Self {
+            tracklists: vec![],
+            mediums: vec![],
+            constraints: vec![],
+        }
     }
 }
